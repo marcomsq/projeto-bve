@@ -1,0 +1,88 @@
+import simpy
+import random
+import numpy as np
+import pandas as pd
+
+# Configuração da simulação
+NUM_TERMINALS = 20
+SHIP_ARRIVAL_RATE = 5  # navios por dia
+SIM_DURATION = 30  # dias de simulação
+
+# Distribuição de destino dos navios
+DESTINATION_PROBS = [0.04, 0.04, 0.05, 0.06, 0.04, 0.06, 0.03, 0.05, 0.04, 0.08, 0.05, 0.04, 0.07, 0.05, 0.06, 0.05, 0.06, 0.05, 0.03, 0.05]
+
+# Parâmetros do tempo de serviço por terminal (distribuição triangular)
+SERVICE_TIMES = {i+1: (4, 8, 6) for i in range(NUM_TERMINALS)}
+
+# Lista única para armazenar resultados
+service_log = []
+
+class Porto:
+    def __init__(self, env):
+        self.env = env
+        # Terminais numerados de 1 a NUM_TERMINALS
+        self.terminals = {i+1: simpy.Resource(env, capacity=1) for i in range(NUM_TERMINALS)}
+
+    def service(self, ship_id, arrival_time, terminal_id, duration_params):
+        with self.terminals[terminal_id].request() as req:
+
+            # Simula atendimento do navio
+            yield req  # Aguarda o terminal ficar disponível
+            start_time = self.env.now
+            duration = random.triangular(*duration_params)
+            yield self.env.timeout(duration)  # Tempo de serviço
+            end_time = self.env.now
+
+            # Armazena informações essenciais
+            service_log.append({
+                'Terminal': terminal_id,
+                'Navio': ship_id,
+                'Chegada': arrival_time,
+                'Início': start_time,
+                'Término': end_time
+            })
+
+            # Opcional: imprimir eventos
+            print(f'Navio {ship_id} chegou no porto em {arrival_time:.2f} horas')
+            print(f'Navio {ship_id} começou a ser atendido no terminal {terminal_id} em {start_time:.2f} horas')
+            print(f'Navio {ship_id} terminou em {end_time:.2f} horas | Tempo de fila: {start_time - arrival_time:.2f}, Tempo de serviço: {duration:.2f}')
+
+def ship_generator(env, porto):
+    ship_id = 0
+    while True:
+        interarrival_time = random.expovariate(SHIP_ARRIVAL_RATE / 24)  # convertendo para horas
+        yield env.timeout(interarrival_time)
+        ship_id += 1
+        destination = np.random.choice(range(1, NUM_TERMINALS+1), p=DESTINATION_PROBS)
+        duration_params = SERVICE_TIMES[destination]
+        arrival_time = env.now
+        env.process(porto.service(ship_id, arrival_time, destination, duration_params))
+
+def run_simulation():
+    env = simpy.Environment()
+    porto = Porto(env)
+    env.process(ship_generator(env, porto))
+    env.run(until=SIM_DURATION * 24)  # Converte dias para horas
+
+    # Gera DataFrame dos navios
+    df_ships = pd.DataFrame(service_log)
+    df_ships = df_ships[['Navio', 'Chegada', 'Terminal', 'Início', 'Término']]
+    df_ships['Fila (h)'] = df_ships['Início'] - df_ships['Chegada']
+    df_ships['Serviço (h)'] = df_ships['Término'] - df_ships['Início']
+
+    # Gera DataFrame dos terminais
+    df_terminals = pd.DataFrame(service_log)
+    df_terminals = df_terminals[['Terminal', 'Navio', 'Início', 'Término']]
+    df_terminals = df_terminals.sort_values(by=['Terminal', 'Início']).reset_index(drop=True)
+    
+    return df_ships, df_terminals
+
+# Roda a simulação
+df_ships, df_terminals = run_simulation()
+
+# Mostra resultados
+print("\nLogs dos navios:")
+display(df_ships.style.format(precision=2))
+
+print("\nLogs dos terminais:")
+display(df_terminals.style.format(precision=2))
